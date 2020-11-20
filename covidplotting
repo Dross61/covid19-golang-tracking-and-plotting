@@ -1,0 +1,134 @@
+// covid_graph_r2 project main.go
+package main
+
+import (
+	"encoding/csv"
+	"fmt"
+	"net/http"
+	"os"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/wcharczuk/go-chart"
+)
+
+func readCSVFromUrl(url string) ([][]string, error) {
+	resp, err := http.Get(url)
+	if err != nil {
+		return nil, err
+	}
+
+	defer resp.Body.Close()
+	reader := csv.NewReader(resp.Body)
+	reader.Comma = ';'
+	data, err := reader.ReadAll()
+	if err != nil {
+		return nil, err
+	}
+	return data, nil
+}
+
+func xvalues(cdates []string) []time.Time {
+	rawx := cdates
+	var dates []time.Time
+	for _, ts := range rawx {
+		parsed, _ := time.Parse(chart.DefaultDateFormat, ts)
+		dates = append(dates, parsed)
+	}
+	return dates
+}
+
+func main() {
+	var index []float64
+	var date []string
+	var state []string
+	var cases []float64
+	var deaths []float64
+	var newcases []float64
+	var newdeaths []float64
+	var newindex []float64
+	var ncra []float64
+	var ndra []float64
+	var nindexra []float64
+	var count int
+
+	url := "https://raw.githubusercontent.com/nytimes/covid-19-data/master/us-states.csv"
+	data, err := readCSVFromUrl(url)
+	if err != nil {
+		panic(err)
+	}
+	for _, row := range data {
+		s := strings.Split(row[0], ",")
+		if s[1] == "Connecticut" { // state to filter on
+			count++
+			index = append(index, float64(count))
+			date = append(date, s[0])
+			state = append(state, s[1])
+			cnum, _ := strconv.ParseFloat(s[3], 64)
+			dnum, _ := strconv.ParseFloat(s[4], 64)
+			cases = append(cases, cnum)
+			deaths = append(deaths, dnum)
+		}
+	}
+	for i := 1; i < count; i++ { // calculate daily, cvs file values are totals
+		//		fmt.Println(i, date[i], state[i], cases[i], deaths[i])
+		newcases = append(newcases, (cases[i] - cases[i-1]))
+		newdeaths = append(newdeaths, (deaths[i] - deaths[i-1]))
+		newi := float64(i)
+		newindex = append(newindex, newi)
+	}
+	var csum, dsum float64
+	var Xdate []string
+
+	for i := 7; i < len(newcases); i++ { // calculate 8 day moving average
+		csum = 0
+		dsum = 0
+		for j := 0; j < 8; j++ {
+			csum = csum + newcases[i-j]
+			dsum = dsum + newdeaths[i-j]
+		}
+		ncra = append(ncra, (csum / 8.0))
+		ndra = append(ndra, (10 * dsum / 8.0))
+		nindexra = append(nindexra, (float64(i)))
+		Xdate = append(Xdate, date[i])
+	}
+
+	xv := xvalues(Xdate)
+
+	title := "Connecticut Daily New Cases, New Deaths(10x) Covid-19, Rolling Ave:8 days"
+	graph := chart.Chart{
+		Title: title,
+		Background: chart.Style{
+			Padding: chart.Box{
+				Top: 40,
+			},
+		},
+		YAxis: chart.YAxis{
+			Name: "People",
+			ValueFormatter: func(v interface{}) string {
+				if vf, isFloat := v.(float64); isFloat {
+					return fmt.Sprintf("%0.0f", vf)
+				}
+				return ""
+			},
+		},
+		XAxis: chart.XAxis{
+			TickPosition: chart.TickPositionBetweenTicks,
+			Name:         "Date",
+		},
+		Series: []chart.Series{
+			chart.TimeSeries{
+				XValues: xv,
+				YValues: ncra,
+			},
+			chart.TimeSeries{
+				XValues: xv,
+				YValues: ndra,
+			},
+		},
+	}
+	f, _ := os.Create("DailyUpdate_CT.png")
+	defer f.Close()
+	graph.Render(chart.PNG, f)
+}
